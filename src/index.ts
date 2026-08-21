@@ -1,50 +1,84 @@
 import express, { Express } from "express";
-import { joinTeam, joinGame,  leaveGame, getPreGameInfo} from './routes/team_routes';
-import bodyParser from 'body-parser';
-import { startGame } from "./routes/routes_admin";
-import { sendLocationUpdate } from "./routes/location_routes";
-import { finishChallenge, startChallenge, vetoChallenge, viewChallenges } from "./routes/challenge_routes";
-import { captureFlag, takeFlag } from "./routes/flag_routes";
-import { handleTag } from "./routes/tag_routes";
-import { useDoublePowerup, useInvisPot, useTicket } from "./routes/item_routes";
-import { getGameInfo, updateCoins } from "./routes/info_routes";
-import { hostname } from "./private";
+import { createServer } from "http";
+import { WebSocketServer } from "ws";
+import { createRoom, findRoomByCode } from "./rooms/roomRegistry";
+import { CTFMatchRoom } from "./rooms/ctf/CTFMatchRoom";
+import { getDb } from "./persistence/db";
 
-// Configure and start the HTTP server.
-const port: number = 8088;
+const port: number = Number(process.env.PORT ?? 8088);
+const host: string = process.env.HOST ?? "0.0.0.0";
+
+// Runs the sqlite migration eagerly on boot rather than waiting for the first match to
+// end, so a bad DB path/permissions issue fails fast instead of silently on game-over.
+getDb();
 
 const app: Express = express();
+app.use(express.json());
 
-app.use(bodyParser.json());
+const httpServer = createServer(app);
+const wss = new WebSocketServer({ noServer: true });
 
+app.post("/api/createMatch", (_req, res) => {
+    const room = createRoom((roomCode) => new CTFMatchRoom(roomCode));
+    res.status(200).json({ roomCode: room.roomCode });
+});
 
-//Pre game api endpoints
-app.post("/api/joinTeam", joinTeam);  
-app.post("/api/joinGame", joinGame);  
-app.post("/api/leaveGame", leaveGame)
-app.post("/api/getPreGameInfo", getPreGameInfo);
+app.post("/api/joinMatch", async (req, res) => {
+    const roomCode = req.body?.roomCode;
+    const playerName = req.body?.playerName;
+    if (typeof roomCode !== "string" || typeof playerName !== "string") {
+        res.status(401).send("roomCode and playerName are required strings");
+        return;
+    }
+    const room = findRoomByCode<CTFMatchRoom>(roomCode);
+    if (room === undefined) {
+        res.status(404).send("No match found with that room code");
+        return;
+    }
+    const idOrError = await room.teamManager.addPlayerToGame(playerName);
+    if (typeof idOrError !== "string") {
+        res.status(idOrError.errorCode).send(idOrError.description);
+        return;
+    }
+    const playerId = idOrError;
+    if (room.hostPlayerId === undefined) {
+        room.hostPlayerId = playerId;
+    }
+    res.status(200).json({ playerId, roomCode: room.roomCode, isHost: room.hostPlayerId === playerId });
+});
 
-//In game api endpoints
-app.post("/api/sendLocationUpdate", sendLocationUpdate);
-app.post("/api/getGameInfo", getGameInfo);
-app.post("/api/updateCoins", updateCoins)
+// Clients connect with wss://host/ws?roomCode=XXXX&playerId=<id returned from /api/joinMatch>.
+// The playerId doubles as the connection credential (same role the old REST id played) -
+// it's an unguessable UUID minted only for the player who legitimately joined that match,
+// so no separate session token is needed. Reusing the same roomCode+playerId after a
+// dropped connection (phone locked, went through a tunnel, etc.) is how reconnection works -
+// there's no separate token or grace-window timer, the player's state just sits in
+// room.playerManagers/teamManager until they reconnect.
+httpServer.on("upgrade", (req, socket, head) => {
+    const url = new URL(req.url ?? "", `http://${req.headers.host}`);
+    const roomCode = url.searchParams.get("roomCode") ?? "";
+    const playerId = url.searchParams.get("playerId") ?? "";
 
-// Challenges
-app.post("/api/viewChallenges", viewChallenges);
-app.post("/api/startChallenge", startChallenge);
-app.post("/api/finishChallenge", finishChallenge);
-app.post("/api/vetoChallenge", vetoChallenge);
-// Flags
-app.post("/api/takeFlag", takeFlag);
-app.post("/api/captureFlag", captureFlag);
-app.post("/api/handleTag", handleTag)
+    const room = findRoomByCode<CTFMatchRoom>(roomCode);
+    const isKnownPlayer = room !== undefined
+        && (room.teamManager.IDToPlayer[playerId] !== undefined || room.playerManagers.has(playerId));
 
-// Items
-app.post("/api/useTicket", useTicket)
-app.post("/api/useInvisibilityPotion", useInvisPot);
-app.post("/api/useDoublePowerup", useDoublePowerup);
+    if (room === undefined || !isKnownPlayer) {
+        socket.destroy();
+        return;
+    }
 
-// Admin endpoints
-app.post("/api/startGame", startGame)
+    wss.handleUpgrade(req, socket, head, (ws) => {
+        room.registerClient(playerId, ws);
+        // A reconnecting player needs whatever snapshot matches where the match actually
+        // is right now - a preGameUpdate would be meaningless (and wrong) to send to
+        // someone reconnecting mid-match.
+        if (room.gameState === "preGame") {
+            room.sendTo(playerId, { type: "preGameUpdate", payload: room.teamManager.getPreGameInfo() });
+        } else {
+            room.sendTo(playerId, { type: "gameUpdate", payload: room.getGameUpdate() });
+        }
+    });
+});
 
-app.listen(port, hostname, () => console.log(`Server listening on ${port}`));
+httpServer.listen(port, host, () => console.log(`Server listening on ${host}:${port}`));

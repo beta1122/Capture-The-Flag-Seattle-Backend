@@ -4,7 +4,8 @@ import { Team } from "../common/types";
 export const VERBOSE: boolean = true;
 export const DISABLE_FLAG_LOCATION_CHECK: boolean = true
 // CONSTANTS
-// 30 minutes
+// Seconds. Currently a dev-friendly 10s for fast testing; set to 1800 for the
+// "30 minutes" the original comment here described but the value never matched.
 export const vetoPeriodDuration = 10;
 export const boundary = 47.6062;
 export const tagVetoPeriodDuration = 1800;
@@ -19,7 +20,8 @@ export const doublePowerUpPrice = 10;
 export const startingCoins = 6;
 export const challengeDrawSize = 3;
 
-export const maxFlagDistance = 100 // 500 ft =  0.001449
+// Meters. How close a player must be to a flag to pick it up (500 ft ≈ 152m).
+export const maxFlagDistance = 152
 
 
 export const inNorthTerritory = (lat: number, lng: number): boolean =>{

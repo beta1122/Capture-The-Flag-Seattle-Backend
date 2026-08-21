@@ -1,7 +1,7 @@
 import { Mutex } from "async-mutex";
 import { Challenge, Error, HandleTagResponse, isError, Team, UpdateCoinsResponse, UseInvisPotResponse, VetoChallengeResponse } from "../common/types";
 import { attacker_InvisbilityPotionDuration, DISABLE_FLAG_LOCATION_CHECK, doublePowerUpPrice, inNorthTerritory, inSouthTerritory, inTeamTerritory, invisibilityPotionPrice, startingCoins, tagVetoPeriodDuration, ticketPrice, VERBOSE, vetoPeriodDuration } from "../config/game_settings";
-import { GameContext } from "./GameController";
+import { CTFRoomContext } from "../rooms/ctf/CTFRoomContext";
 import { FlagManager } from "./FlagManager";
 
 // Manages all the actions a player can take
@@ -9,7 +9,7 @@ export class PlayerManager{
     name: string;
     team: Team;
     id: string
-    constructor(name: string, team: Team, id: string, getGameContext: () => GameContext){
+    constructor(name: string, team: Team, id: string, getGameContext: () => CTFRoomContext){
         this.name = name;
         this.team = team;
         this.id = id;
@@ -17,7 +17,7 @@ export class PlayerManager{
     }
 
     lock: Mutex = new Mutex;
-    getGameContext: () => GameContext;
+    getGameContext: () => CTFRoomContext;
     // Location
     lat: number = 0;
     lng: number = 0;
@@ -30,6 +30,11 @@ export class PlayerManager{
 
     coins: number = startingCoins;
 
+    // Push notification extension point: set via a future "registerDevice" client
+    // message once APNs/FCM support is added. Scoped to this match/player only, not a
+    // persistent account - matches the project's no-accounts design.
+    deviceToken?: string;
+
     // States
     flagHeld?: string //Flag the player is holding
     currChallenge?: Challenge;
@@ -41,9 +46,8 @@ export class PlayerManager{
     isTagged: boolean = false;   
     
 
-    // updates player, then logs event, then looks for flag and maybe updates, 
+    // updates player, then logs event, then looks for flag and maybe updates,
     async updateLocation(lat: number, lng: number): Promise<Error|undefined>{
-        console.log("Game state in method: "+ this.getGameContext().gameState)
         if(this.getGameContext().gameState != "inGame"){
             return {errorCode: 400, description: "Not in game while trying to update location"};
         }
@@ -86,8 +90,7 @@ export class PlayerManager{
             }
             return flagManager.moveFlag(this.name, lat,lng);
         }
-        console.log("REceived location update");
-        return undefined;   
+        return undefined;
     }
     
     async startChallenge(challengeTitle: string): Promise<Error|Challenge>{
@@ -140,11 +143,8 @@ export class PlayerManager{
             }
 
             // cash out
-            if(this.doubleNextChallenge){
-                this.doubleNextChallenge = false;
-                this.coins+= this.currChallenge.coins;
-            }
-            this.coins+= this.currChallenge.coins;
+            this.coins += this.currChallenge.coins * (this.doubleNextChallenge ? 2 : 1);
+            this.doubleNextChallenge = false;
             this.currChallenge = undefined;
             
             return undefined;

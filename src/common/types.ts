@@ -1,11 +1,5 @@
-import { Request, Response } from "express";
-import { ParamsDictionary } from "express-serve-static-core"; 
 // Enum for all the stages of the game
 export type GameState = "inGame" | "preGame" | "postGame";
-
-// Require type checking of request body.
-export type SafeRequest = Request<ParamsDictionary, {}, Record<string, unknown>>;
-export type SafeResponse = Response;  
 
 export type Team = "North"| "South"
 export type FlagState = "grounded" | "held" |"captured";
@@ -67,7 +61,8 @@ export type TagUpdate = {
 }
 //All relevant information for pregame for game to send to players.
 export type PreGameUpdate = {
-    teamlessPlayers: string[],
+    gameState: GameState,
+    playersWithoutTeams: string[],
     teamNorth: string[],
     teamSouth: string[],
 }

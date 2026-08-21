@@ -1,84 +1,71 @@
-import * as assert from "assert"
-import * as httpMocks from "node-mocks-http"
-import { gameController } from "../modules/GameController";
-import { PlayerManager } from "../modules/PlayerManager";
-import { handleTag } from "../routes/tag_routes";
-import { startingCoins } from "../config/game_settings";
+import * as assert from 'assert';
+import { CTFMatchRoom } from '../rooms/ctf/CTFMatchRoom';
+import { PlayerManager } from '../modules/PlayerManager';
+import { FakeSocket } from './helpers/testRoom';
+import { handleTag } from '../rooms/ctf/handlers/tagHandlers';
 
-describe('tag_routes', function(){
-    it("handleTag", async function(){
-        gameController.resetGame();
-        gameController.gameState = "inGame";
-        gameController.setFlags();
-        gameController.teamManager.playerToID["Beta"] = "Beta_id"
-        const BetaPlayerManager = new PlayerManager("Beta", "South", "Beta_id", gameController.getGameContext.bind(gameController))
-        gameController.playerManagers.set("Beta_id", BetaPlayerManager);
+describe('tag handler', function() {
 
-        // try getting tagged when already tagged :(
-        BetaPlayerManager.isTagged = true;
-        const req1 = httpMocks.createRequest({method: "POST",  url: "/api/handleTag", body: {id: "Beta_id", name: ""}})
-        const res1 = httpMocks.createResponse();
-        await handleTag(req1, res1);
-        assert.strictEqual(res1._getData(), "You already got tagged! You shouldn't be able to get tagged again until you return.");
+    it('handleTag', async function() {
+        const room = new CTFMatchRoom('TEST');
+        room.gameState = 'inGame';
+        room.setFlags();
 
-        BetaPlayerManager.isTagged = false;
-        // Try getting tagged in own territory
+        // Alpha (North) defaults to lat 0, which is south of the boundary (47.6062) -
+        // i.e. out in South's (enemy) territory, so Alpha is taggable.
+        const alphaId = 'Alpha_id';
+        const alpha = new PlayerManager('Alpha', 'North', alphaId, room.getContext.bind(room));
+        room.playerManagers.set(alphaId, alpha);
+        room.teamManager.playerToID['Alpha'] = alphaId;
+        const alphaSocket = new FakeSocket();
+        room.registerClient(alphaId, alphaSocket as any);
 
-        const res2 = httpMocks.createResponse();
-        await handleTag(req1, res2);
-        assert.strictEqual(res2._getData(), "You can't get tagged in your own territory!");
+        const betaId = 'Beta_id';
+        const beta = new PlayerManager('Beta', 'South', betaId, room.getContext.bind(room));
+        room.playerManagers.set(betaId, beta);
+        room.teamManager.playerToID['Beta'] = betaId;
 
-        // get tagged by the air
-        BetaPlayerManager.lat = 100;
-        const res3 = httpMocks.createResponse();
-        await handleTag(req1, res3);
-        assert.strictEqual(res3._getData(), "coudln't find player with that name. please try again.");
+        const gammaId = 'Gamma_id';
+        const gamma = new PlayerManager('Gamma', 'North', gammaId, room.getContext.bind(room));
+        room.playerManagers.set(gammaId, gamma);
+        room.teamManager.playerToID['Gamma'] = gammaId;
 
-        // Register another player, but on our team
-        const AlphaPlayerManager = new PlayerManager("Alpha", "South", "Alpha_id", gameController.getGameContext.bind(gameController))
-        gameController.playerManagers.set("Alpha_id", AlphaPlayerManager);
-        const req2 = httpMocks.createRequest({method: "POST",  url: "/api/handleTag", body: {id: "Beta_id", name: "Alpha"}})
-        const res4 = httpMocks.createResponse();
-        gameController.teamManager.playerToID["Alpha"] = "Alpha_id";
-        await handleTag(req2, res4);
-        assert.strictEqual(res4._getData(), "You can't get tagged by a player on your own team");
+        // Unknown tagger name
+        await handleTag(room, alphaId, { taggerName: 'NoOneWithThisName' });
+        assert.strictEqual(alphaSocket.sent[alphaSocket.sent.length - 1].payload.errorCode, 407);
 
-        // Okay fine we'll try to get tagged by a player on the opposite team
-        AlphaPlayerManager.team = "North";
-        const res5 = httpMocks.createResponse();
-        await handleTag(req2, res5);
-        assert.strictEqual(res5._getData(), "Success");
+        // Same-team tagger rejected
+        await handleTag(room, alphaId, { taggerName: 'Gamma' });
+        assert.strictEqual(alphaSocket.sent[alphaSocket.sent.length - 1].payload.errorCode, 408);
 
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 1);
-        assert.strictEqual(BetaPlayerManager.coins, 0);
-        assert.strictEqual(AlphaPlayerManager.coins, startingCoins + startingCoins);
-        assert.strictEqual(BetaPlayerManager.isTagged, true);
-        assert.ok(BetaPlayerManager.vetoPeriodEnd !== undefined);
-        assert.ok(BetaPlayerManager.vetoPeriodEnd > Date.now());
+        // Can't be tagged in your own territory
+        alpha.lat = 100; // north of the boundary -> Alpha's own (North) territory
+        await handleTag(room, alphaId, { taggerName: 'Beta' });
+        assert.strictEqual(alphaSocket.sent[alphaSocket.sent.length - 1].payload.errorCode, 408);
+        alpha.lat = 0; // back into enemy territory
 
-        // Try tagging another player now, this time with a flag
-        const DeltaPlayerManager = new PlayerManager("Delta", "North", "Delta_id", gameController.getGameContext.bind(gameController))
-        gameController.playerManagers.set("Delta_id", DeltaPlayerManager);
-        DeltaPlayerManager.flagHeld = "Mariners Stadium, SW Entrance";
-        const flag = gameController.southFlags.get("Mariners Stadium, SW Entrance");
-        assert.ok(flag!= undefined);
-        flag.playerHolding="Delta";
-        flag.flagState = "held";
-        const req3 = httpMocks.createRequest({method: "POST",  url: "/api/handleTag", body: {id: "Delta_id", name: "Beta"}})
-        const res6 = httpMocks.createResponse();
+        // Success - Alpha is also carrying a flag, which should drop on tag
+        const flag = room.southFlags.get('The Magic Shop in Pike Place')!;
+        flag.playerHolding = 'Alpha';
+        flag.flagState = 'held';
+        alpha.flagHeld = 'The Magic Shop in Pike Place';
 
-        await handleTag(req3, res6);
-        assert.strictEqual(res6._getData(), "Success");
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 2);
-        assert.strictEqual(DeltaPlayerManager.coins, 0);
-        assert.strictEqual(BetaPlayerManager.coins, startingCoins);
-        assert.strictEqual(DeltaPlayerManager.isTagged, true);
-        assert.ok(DeltaPlayerManager.vetoPeriodEnd !== undefined);
-        assert.ok(DeltaPlayerManager.vetoPeriodEnd > Date.now());
-        // Confirm flag 
-        assert.strictEqual(flag.flagState, "grounded");
+        const alphaCoinsBeforeTag = alpha.coins;
+        const betaCoinsBefore = beta.coins;
+        await handleTag(room, alphaId, { taggerName: 'Beta' });
+        const result = alphaSocket.sent[alphaSocket.sent.length - 1];
+        assert.strictEqual(result.type, 'tagResult');
+        assert.ok(result.payload.vetoPeriodEnd !== undefined);
+        assert.strictEqual(alpha.isTagged, true);
+        assert.strictEqual(alpha.coins, 0);
+        assert.strictEqual(alpha.flagHeld, undefined);
+        assert.strictEqual(flag.flagState, 'grounded');
         assert.strictEqual(flag.playerHolding, undefined);
-        assert.strictEqual(DeltaPlayerManager.flagHeld, undefined);
-    
-    })
-})
+        // The tagged player's coins transfer to the tagger
+        assert.strictEqual(beta.coins, betaCoinsBefore + alphaCoinsBeforeTag);
+
+        // Already-tagged rejection
+        await handleTag(room, alphaId, { taggerName: 'Beta' });
+        assert.strictEqual(alphaSocket.sent[alphaSocket.sent.length - 1].payload.errorCode, 406);
+    });
+});

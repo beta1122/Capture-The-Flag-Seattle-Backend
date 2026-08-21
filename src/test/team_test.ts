@@ -1,163 +1,119 @@
 import * as assert from 'assert';
-import * as httpMocks from 'node-mocks-http';
-import { joinTeam, joinGame,  leaveGame, getPreGameInfo} from '../routes/team_routes';
-import { gameController } from '../modules/GameController';
-describe('pregame_routes', function() {
-  it('joinGame', async function() {
-     await gameController.teamManager.resetPreGame();
-     gameController.gameState = "preGame"
-      // Test basic join
-      const req1 = httpMocks.createRequest(
-          {method: 'POST', url: '/api/joinGame', body: {playerName: 'Bob'} });
-      const res1 = httpMocks.createResponse();
-      await joinGame(req1, res1);
-      assert.strictEqual(res1._getStatusCode(), 200);
-      const bob_id = res1._getData().id;
+import { CTFMatchRoom } from '../rooms/ctf/CTFMatchRoom';
+import { FakeSocket } from './helpers/testRoom';
+import { handleJoinTeam, handleStartGame } from '../rooms/ctf/handlers/teamHandlers';
 
-      assert.notStrictEqual(bob_id, undefined);
+describe('team handlers', function() {
 
-      // Enter the same player, should give error
-      const res2 = httpMocks.createResponse();
-      await joinGame(req1, res2);
-      assert.strictEqual(res2._getStatusCode(), 401);
-      const message = res2._getData(); // gets string or object passed to res.send()
-      
-      assert.strictEqual(message, 'There already is a player with this name in the game.');
-      
-      // Test another request
-      const req3 = httpMocks.createRequest(
-        {method: 'POST', url: '/api/joinGame', body: {playerName: 'Beta'} });
-      const res3 = httpMocks.createResponse();
-      await joinGame(req3, res3);
-      assert.strictEqual(res3._getStatusCode(), 200);
+    it('addPlayerToGame (join)', async function() {
+        const room = new CTFMatchRoom('TEST');
 
-      await gameController.teamManager.resetPreGame();
+        const bobId = await room.teamManager.addPlayerToGame('Bob');
+        assert.strictEqual(typeof bobId, 'string');
+
+        // Duplicate name rejected
+        const dup = await room.teamManager.addPlayerToGame('Bob');
+        assert.deepEqual(dup, { errorCode: 401, description: 'There already is a player with this name in the game.' });
+
+        const betaId = await room.teamManager.addPlayerToGame('Beta');
+        assert.strictEqual(typeof betaId, 'string');
     });
 
-  it('joinTeam', async function() {
-      await gameController.teamManager.resetPreGame();
-      // Test joining team before being in the game.
-      const req1 = httpMocks.createRequest(
-          {method: 'POST', url: '/api/joinTeam', body: {id: 'Bob', team: 'North'}});
-      const res1 = httpMocks.createResponse();
-      await joinTeam(req1, res1);
-      console.log(gameController.teamManager.IDToPlayer);
-      assert.strictEqual(res1._getStatusCode(), 401);
+    it('joinTeam', async function() {
+        const room = new CTFMatchRoom('TEST');
+        const bobId = await room.teamManager.addPlayerToGame('Bob') as string;
 
-      assert.strictEqual(res1._getData(), "ID not found");
-      
+        const socket = new FakeSocket();
+        room.registerClient(bobId, socket as any);
 
-      // Make sure nothing happened with the team
-      assert.deepEqual(gameController.teamManager.teamNorth,[]);
+        // handleJoinTeam sends a direct joinTeamResult reply, then broadcasts a
+        // preGameUpdate to the whole room (Bob included) - so the result is always the
+        // message appended right before the broadcast, not necessarily the last one sent.
+        await handleJoinTeam(room, bobId, { team: 'North' });
+        assert.deepEqual(room.teamManager.teamNorth, ['Bob']);
+        assert.deepEqual(socket.sent[0], { type: 'joinTeamResult', payload: { success: true } });
+        assert.strictEqual(socket.sent[1].type, 'preGameUpdate');
 
-      // Ok, lets add the player into the game first now
-      const req2 = httpMocks.createRequest(
-          {method: 'POST', url: '/api/joinGame', body: {playerName: 'Bob'} });
-      const res2 = httpMocks.createResponse();
-      await joinGame(req2, res2);
-      assert.strictEqual(res2._getStatusCode(), 200);
-      const bob_id = res2._getData().id;
-      assert.notStrictEqual(bob_id, undefined);
+        await handleJoinTeam(room, bobId, { team: 'South' });
+        assert.deepEqual(room.teamManager.teamNorth, []);
+        assert.deepEqual(room.teamManager.teamSouth, ['Bob']);
+        assert.deepEqual(socket.sent[2], { type: 'joinTeamResult', payload: { success: true } });
 
-      // Now redo the joining team
-      const req3 = httpMocks.createRequest(
-          {method: 'POST', url: '/api/joinTeam', body: {id: bob_id, team: 'North'}});
-      const res3 = httpMocks.createResponse();
-      await joinTeam(req3, res3);
-      assert.strictEqual(res3._getData(), "Success");
-      assert.strictEqual(res3._getStatusCode(), 200);
-      
-        //   Check the status of the server
-      assert.deepEqual(gameController.teamManager.teamNorth,["Bob"]);
-      
-      // Join a different team now 
-      const req4 = httpMocks.createRequest(
-          {method: 'POST', url: '/api/joinTeam', body: {id: bob_id, team: 'South'}});
-      const res4 = httpMocks.createResponse();
-      await joinTeam(req4, res4);
-      assert.strictEqual(res4._getStatusCode(), 200);
-
-      // Check the status of the server 
-     assert.deepEqual(gameController.teamManager.teamNorth,[]);
-     assert.deepEqual(gameController.teamManager.teamSouth,["Bob"]);
-
-      // Join any other team 
-      const req5 = httpMocks.createRequest(
-          {method: 'POST', url: '/api/joinTeam', body: {id: bob_id, team: 'teamSfsifljskfslkfslkuth'}});
-      const res5 = httpMocks.createResponse();
-      await joinTeam(req5, res5);
-      assert.strictEqual(res5._getStatusCode(), 403);
-
-      // Check the status of the server
-    assert.deepEqual(gameController.teamManager.teamNorth,[]);
-    assert.deepEqual(gameController.teamManager.teamSouth,["Bob"]);
-    assert.deepEqual(gameController.teamManager.playersWithoutTeams,[]);
-
-      gameController.teamManager.resetPreGame();
-  });
-
-  it('leaveGame', async function() {
-      // Add a player first
-
-      const req1 = httpMocks.createRequest(
-          {method: 'POST', url: '/api/joinGame', body: {playerName: 'Beta'} });
-      const res1 = httpMocks.createResponse();
-      await joinGame(req1, res1);
-      assert.strictEqual(res1._getStatusCode(), 200);
-      const beta_id = res1._getData().id;
-      assert.notStrictEqual(beta_id, undefined);
-
-      const req2 = httpMocks.createRequest(
-          {method: 'POST', url: '/api/joinGame', body: {playerName: 'Bob'} });
-      const res2 = httpMocks.createResponse();
-      await joinGame(req2, res2);
-      assert.strictEqual(res2._getStatusCode(), 200);
-      const bob_id = res2._getData().id;
-      assert.notStrictEqual(bob_id, undefined);
-
-        gameController.teamManager.teamNorth.push("Beta");
-      
-      // Remove Bob
-      const req5 = httpMocks.createRequest({method: 'POST',url: "/api/leaveGame", body: {id: bob_id}})
-      const res5 = httpMocks.createResponse()
-      await leaveGame(req5,res5)
-      assert.strictEqual(res5._getStatusCode(), 200)
-
-      // Check status
-     assert.deepEqual(gameController.teamManager.teamNorth, ["Beta"]);
-
-      // Remove Beta
-      const req = httpMocks.createRequest({method: 'POST',url: "/api/leaveGame", body: {id: beta_id}})
-      const res = httpMocks.createResponse()
-      await leaveGame(req,res)
-      assert.strictEqual(res._getStatusCode(), 200)
-
-      // Check status
-     assert.deepEqual(gameController.teamManager.teamNorth, []);
-      gameController.teamManager.resetPreGame();
+        await handleJoinTeam(room, bobId, { team: 'not-a-team' });
+        const last = socket.sent[socket.sent.length - 1];
+        assert.strictEqual(last.type, 'joinTeamResult');
+        assert.strictEqual(last.payload.errorCode, 401);
     });
 
-    it('getPreGameInfo', function() {
-      // Check data of default
-      //resetPreGame();
-      const req = httpMocks.createRequest({method: 'POST',url: "/api/getPreGameInfo", body: {}})
-      const res = httpMocks.createResponse()
-      getPreGameInfo(req,res);
-      assert.strictEqual(res._getStatusCode(), 200)
-      assert.deepEqual(res._getData(), {
-        gameState: 'preGame',
-        playersWithoutTeams: [],
-        teamNorth: [],
-        teamSouth:[]
-      });
+    it('joinTeam rejects an unknown playerId', async function() {
+        const room = new CTFMatchRoom('TEST');
+        const socket = new FakeSocket();
+        room.registerClient('not-a-real-id', socket as any);
 
-      // Add some players
-    //   teamNorth.push("Bob");
-    //   teamNorth.push("Beta");
+        await handleJoinTeam(room, 'not-a-real-id', { team: 'North' });
+        const last = socket.sent[socket.sent.length - 1];
+        assert.strictEqual(last.type, 'joinTeamResult');
+        assert.strictEqual(last.payload.errorCode, 401);
+        assert.deepEqual(room.teamManager.teamNorth, []);
+    });
 
-    //   teamSouth.push("Beta2"); 
+    it('removePlayerFromGame (leave)', async function() {
+        const room = new CTFMatchRoom('TEST');
+        const betaId = await room.teamManager.addPlayerToGame('Beta') as string;
+        const bobId = await room.teamManager.addPlayerToGame('Bob') as string;
+        room.teamManager.teamNorth.push('Beta');
 
-    //   playersWithoutTeams.push("Bob2");
-    })
+        await room.teamManager.removePlayerFromGame(bobId);
+        assert.deepEqual(room.teamManager.teamNorth, ['Beta']);
 
-})
+        await room.teamManager.removePlayerFromGame(betaId);
+        assert.deepEqual(room.teamManager.teamNorth, []);
+    });
+
+    it('getPreGameInfo default shape', function() {
+        const room = new CTFMatchRoom('TEST');
+        assert.deepEqual(room.teamManager.getPreGameInfo(), {
+            gameState: 'preGame',
+            playersWithoutTeams: [],
+            teamNorth: [],
+            teamSouth: [],
+        });
+    });
+
+    it('startGame rejects a non-host player', async function() {
+        const room = new CTFMatchRoom('TEST');
+        const bobId = await room.teamManager.addPlayerToGame('Bob') as string;
+        const betaId = await room.teamManager.addPlayerToGame('Beta') as string;
+        room.hostPlayerId = bobId;
+
+        const socket = new FakeSocket();
+        room.registerClient(betaId, socket as any);
+
+        await handleStartGame(room, betaId);
+        assert.strictEqual(room.gameState, 'preGame');
+        assert.deepEqual(socket.sent[0], {
+            type: 'startGameResult',
+            payload: { errorCode: 403, description: 'Only the match host can start the game' },
+        });
+
+        room.dispose();
+    });
+
+    it('startGame succeeds for the host and populates player managers', async function() {
+        const room = new CTFMatchRoom('TEST');
+        const bobId = await room.teamManager.addPlayerToGame('Bob') as string;
+        room.hostPlayerId = bobId;
+        room.teamManager.teamNorth.push('Bob');
+
+        const socket = new FakeSocket();
+        room.registerClient(bobId, socket as any);
+
+        await handleStartGame(room, bobId);
+        assert.strictEqual(room.gameState, 'inGame');
+        assert.ok(room.playerManagers.has(bobId));
+        assert.deepEqual(socket.sent[0], { type: 'startGameResult', payload: { success: true } });
+        assert.strictEqual(socket.sent[1].type, 'gameUpdate');
+
+        room.dispose();
+    });
+});

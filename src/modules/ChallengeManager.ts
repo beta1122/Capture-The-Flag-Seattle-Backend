@@ -9,7 +9,12 @@ export class ChallengeManager {
     lock: Mutex = new Mutex();
 
     constructor() {
-        this.ChallengeDeck = [...gameChallenges].sort(() => Math.random() - 0.5);
+        this.ChallengeDeck = [...gameChallenges];
+        // Fisher-Yates: sort(() => Math.random() - 0.5) is a statistically biased shuffle.
+        for (let i = this.ChallengeDeck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [this.ChallengeDeck[i], this.ChallengeDeck[j]] = [this.ChallengeDeck[j], this.ChallengeDeck[i]];
+        }
     }
 
     async viewTop(): Promise<Challenge[]>{

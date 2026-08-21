@@ -1,7 +1,8 @@
 import { Mutex } from "async-mutex";
 import { Error, FlagState, Team } from "../common/types";
-import { GameContext } from "./GameController";
-import { DISABLE_FLAG_LOCATION_CHECK, maxFlagDistance as maxFlagDistance } from "../config/game_settings";
+import { CTFRoomContext } from "../rooms/ctf/CTFRoomContext";
+import { DISABLE_FLAG_LOCATION_CHECK, maxFlagDistance } from "../config/game_settings";
+import { distanceMeters } from "../common/geo";
 
 // Flag manager is not responsible for reporting events as it has no knowledge of any game state
 
@@ -17,7 +18,7 @@ export class FlagManager{
     team: Team;
 
     constructor(title: string, lat: number, lng: number, description: string, reward: number, team: Team,
-        private getGameContext: () => GameContext
+        private getGameContext: () => CTFRoomContext
     ){
         this.title = title;
         this.lat = lat;
@@ -41,7 +42,7 @@ export class FlagManager{
                     description: "Flag is either captured or held by a player"
                 }
             }
-            if(this.lat-lat > maxFlagDistance || this.lng-lng > maxFlagDistance && !DISABLE_FLAG_LOCATION_CHECK){
+            if(!DISABLE_FLAG_LOCATION_CHECK && distanceMeters(this.lat, this.lng, lat, lng) > maxFlagDistance){
               return {
                 errorCode: 405,
                 description: "You're not close enough to the flag yet!"

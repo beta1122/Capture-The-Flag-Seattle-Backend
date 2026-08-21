@@ -1,85 +1,89 @@
 import * as assert from 'assert';
-import * as httpMocks from 'node-mocks-http';
-
-import { gameController } from '../modules/GameController';
+import { CTFMatchRoom } from '../rooms/ctf/CTFMatchRoom';
 import { PlayerManager } from '../modules/PlayerManager';
-import { useDoublePowerup, useInvisPot, useTicket } from '../routes/item_routes';
-import { doublePowerUpPrice, invisibilityPotionPrice, ticketPrice } from '../config/game_settings';
+import { FakeSocket } from './helpers/testRoom';
+import { handleUseTicket, handleUseInvisPot, handleUseDoublePowerup, handleUpdateCoins } from '../rooms/ctf/handlers/itemHandlers';
+import { ticketPrice, invisibilityPotionPrice, doublePowerUpPrice, startingCoins } from '../config/game_settings';
 
-describe('item_routes', function() {
+describe('item handlers', function() {
 
-    it('useTicket', async function() {
-         gameController.resetGame();
+    it('handleUseTicket', async function() {
+        const room = new CTFMatchRoom('TEST');
+        room.gameState = 'inGame';
+        const id = 'Alpha_id';
+        const player = new PlayerManager('Alpha', 'North', id, room.getContext.bind(room));
+        room.playerManagers.set(id, player);
+        const socket = new FakeSocket();
+        room.registerClient(id, socket as any);
 
-        //Set up
-        gameController.setFlags();
-        gameController.gameState = "inGame";
-        const BetaPlayerManager = new PlayerManager("Beta", "South", "Beta_id", gameController.getGameContext.bind(gameController))
-        gameController.playerManagers.set("Beta_id", BetaPlayerManager);
-        
-        const req1 = httpMocks.createRequest({method: "POST", url: "/api/useTicket", body: {id: "Beta_id", num: 1}})
-        const res1 = httpMocks.createResponse();
-        BetaPlayerManager.coins = 100;
-        await useTicket(req1, res1);
-        assert.strictEqual(res1._getData(), "Success");
-        assert.strictEqual(BetaPlayerManager.coins, 100- ticketPrice);
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 1);
-        const req2 = httpMocks.createRequest({method: "POST", url: "/api/useTicket", body: {id: "Beta_id", num: 100}})
-        const res2 = httpMocks.createResponse();
-        await useTicket(req2, res2);
-        assert.strictEqual(res2._getStatusCode(), 403);
-        assert.strictEqual(BetaPlayerManager.coins, 100- ticketPrice);
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 1);
-    })
-    it('useInvisibilityPotion', async function() {
-         gameController.resetGame();
+        // Insufficient funds
+        await handleUseTicket(room, id, { num: 1000 });
+        assert.strictEqual(socket.sent[socket.sent.length - 1].payload.errorCode, 403);
+        assert.strictEqual(player.coins, startingCoins);
 
-        //Set up
-        gameController.setFlags();
-        gameController.gameState = "inGame";
-        const BetaPlayerManager = new PlayerManager("Beta", "South", "Beta_id", gameController.getGameContext.bind(gameController))
-        gameController.playerManagers.set("Beta_id", BetaPlayerManager);
-        
-        const req1 = httpMocks.createRequest({method: "POST", url: "/api/useInvisibilityPotion", body: {id: "Beta_id"}})
-        const res1 = httpMocks.createResponse();
-        BetaPlayerManager.coins = 100;
-        await useInvisPot(req1, res1);
-        assert.strictEqual(res1._getData(), "Success");
-        assert.strictEqual(BetaPlayerManager.coins, 100- invisibilityPotionPrice);
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 1);
-        assert.ok(BetaPlayerManager.invisibilityEnd != undefined);
-        BetaPlayerManager.coins = 0;
-        const req2 = httpMocks.createRequest({method: "POST", url: "/api/useInvisibilityPotion", body: {id: "Beta_id"}})
-        const res2 = httpMocks.createResponse();
-        await useInvisPot(req2, res2);
-        assert.strictEqual(res2._getStatusCode(), 403);
-        assert.strictEqual(BetaPlayerManager.coins,0);
-    })
+        // Success
+        await handleUseTicket(room, id, { num: 1 });
+        assert.deepEqual(socket.sent[socket.sent.length - 1], { type: 'useTicketResult', payload: { success: true } });
+        assert.strictEqual(player.coins, startingCoins - ticketPrice);
+    });
 
-    it('useDoublePowerup', async function() {
-         gameController.resetGame();
+    it('handleUseInvisPot', async function() {
+        const room = new CTFMatchRoom('TEST');
+        room.gameState = 'inGame';
+        const id = 'Beta_id';
+        const player = new PlayerManager('Beta', 'South', id, room.getContext.bind(room));
+        player.coins = invisibilityPotionPrice - 1;
+        room.playerManagers.set(id, player);
+        const socket = new FakeSocket();
+        room.registerClient(id, socket as any);
 
-        //Set up
-        gameController.setFlags();
-        gameController.gameState = "inGame";
-        const BetaPlayerManager = new PlayerManager("Beta", "South", "Beta_id", gameController.getGameContext.bind(gameController))
-        gameController.playerManagers.set("Beta_id", BetaPlayerManager);
-        
-        const req1 = httpMocks.createRequest({method: "POST", url: "/api/useDoublePowerup", body: {id: "Beta_id"}})
-        const res1 = httpMocks.createResponse();
-        BetaPlayerManager.coins = 100;
-        await useDoublePowerup(req1, res1);
-        assert.strictEqual(res1._getData(), "Success");
-        assert.strictEqual(BetaPlayerManager.coins, 100- doublePowerUpPrice);
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 1);
-        assert.ok(BetaPlayerManager.invisibilityEnd == undefined);
-        assert.ok(BetaPlayerManager.doubleNextChallenge == true);
-        BetaPlayerManager.coins = 0;
-        const req2 = httpMocks.createRequest({method: "POST", url: "/api/useDoublePowerup", body: {id: "Beta_id"}})
-        const res2 = httpMocks.createResponse();
-        await useDoublePowerup(req2, res2);
-        assert.strictEqual(res2._getStatusCode(), 403);
-        assert.strictEqual(BetaPlayerManager.coins,0);
-    })
+        // Insufficient funds
+        await handleUseInvisPot(room, id);
+        assert.strictEqual(socket.sent[socket.sent.length - 1].payload.errorCode, 403);
 
-})
+        // Success
+        player.coins = invisibilityPotionPrice;
+        await handleUseInvisPot(room, id);
+        const result = socket.sent[socket.sent.length - 1];
+        assert.strictEqual(result.type, 'useInvisPotResult');
+        assert.ok(result.payload.invisibilityEnd !== undefined);
+        assert.strictEqual(player.coins, 0);
+        assert.ok(player.invisibilityEnd !== undefined && player.invisibilityEnd > Date.now());
+    });
+
+    it('handleUseDoublePowerup', async function() {
+        const room = new CTFMatchRoom('TEST');
+        room.gameState = 'inGame';
+        const id = 'Gamma_id';
+        const player = new PlayerManager('Gamma', 'North', id, room.getContext.bind(room));
+        player.coins = doublePowerUpPrice - 1;
+        room.playerManagers.set(id, player);
+        const socket = new FakeSocket();
+        room.registerClient(id, socket as any);
+
+        // Insufficient funds
+        await handleUseDoublePowerup(room, id);
+        assert.strictEqual(socket.sent[socket.sent.length - 1].payload.errorCode, 403);
+
+        // Success
+        player.coins = doublePowerUpPrice;
+        await handleUseDoublePowerup(room, id);
+        const result = socket.sent[socket.sent.length - 1];
+        assert.strictEqual(result.type, 'useDoublePowerupResult');
+        assert.strictEqual(player.doubleNextChallenge, true);
+        assert.strictEqual(player.coins, 0);
+    });
+
+    it('handleUpdateCoins', async function() {
+        const room = new CTFMatchRoom('TEST');
+        room.gameState = 'inGame';
+        const id = 'Delta_id';
+        const player = new PlayerManager('Delta', 'South', id, room.getContext.bind(room));
+        room.playerManagers.set(id, player);
+        const socket = new FakeSocket();
+        room.registerClient(id, socket as any);
+
+        await handleUpdateCoins(room, id);
+        assert.deepEqual(socket.sent[0], { type: 'updateCoinsResult', payload: { coins: startingCoins } });
+    });
+});

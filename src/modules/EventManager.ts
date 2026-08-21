@@ -1,14 +1,20 @@
 import { Mutex } from "async-mutex";
-import { Event, PlayerStatus, Challenge, Item} from "../common/types";
+import { Event, Challenge, Item} from "../common/types";
 
 export class EventManager{
-    // Array of latest updates from players.
-    statusUpdates: PlayerStatus[] = []
-
-    // All status updates, used to make replay at the end.
-
+    // All logged events for this match, used to build a replay at the end.
     gameEvents: Event[] = [];
     gameEventLock = new Mutex();
+    private flushed = false;
+
+    // Returns all logged events exactly once - a second call returns undefined, so a
+    // room can safely call this from both a natural game-end and a dispose() safety net
+    // without double-writing to persistence.
+    flush(): Event[] | undefined {
+        if (this.flushed) return undefined;
+        this.flushed = true;
+        return this.gameEvents;
+    }
 
     async addLocationUpdate(playerID: string, lat: number, lng: number){
         const newEvent:Event = {

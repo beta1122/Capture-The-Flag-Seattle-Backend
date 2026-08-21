@@ -1,192 +1,75 @@
-import * as assert from "assert"
-import * as httpMocks from "node-mocks-http"
-import { gameController } from "../modules/GameController"
-import { PlayerManager } from "../modules/PlayerManager"
-import { finishChallenge, startChallenge, vetoChallenge, viewChallenges } from "../routes/challenge_routes"
-import { challengeDrawSize, startingCoins } from "../config/game_settings"
-import { Challenge } from "../common/types"
+import * as assert from 'assert';
+import { CTFMatchRoom } from '../rooms/ctf/CTFMatchRoom';
+import { PlayerManager } from '../modules/PlayerManager';
+import { FakeSocket } from './helpers/testRoom';
+import { handleViewChallenges, handleStartChallenge, handleFinishChallenge, handleVetoChallenge } from '../rooms/ctf/handlers/challengeHandlers';
+import { challengeDrawSize } from '../config/game_settings';
 
-describe('challenge_routes', function(){
-    it("viewChallenges", async function(){
-        gameController.resetGame();
-        
-        const req1 = httpMocks.createRequest({method: "POST", url: "/api/ViewChallenges", body: {}});
-        const res1 = httpMocks.createResponse();
-        await viewChallenges(req1, res1);
-        assert.strictEqual(res1._getStatusCode(), 200);
-        assert.strictEqual(res1._getData().length,challengeDrawSize);
+describe('challenge handlers', function() {
 
-        gameController.challengeManager.ChallengeDeck = []
-        const res2 = httpMocks.createResponse();
-        await viewChallenges(req1, res1);
-        assert.strictEqual(res2._getStatusCode(), 200);
-        assert.strictEqual(res2._getData().length,0);
-    })
+    it('handleViewChallenges', async function() {
+        const room = new CTFMatchRoom('TEST');
+        room.gameState = 'inGame';
+        const id = 'Alpha_id';
+        room.playerManagers.set(id, new PlayerManager('Alpha', 'North', id, room.getContext.bind(room)));
+        const socket = new FakeSocket();
+        room.registerClient(id, socket as any);
 
-    it('startChallenge', async function() {
-        gameController.resetGame();
-        gameController.gameState= "inGame"
-        const BetaPlayerManager = new PlayerManager("Beta", "North", "Beta_id", gameController.getGameContext.bind(gameController));
-        gameController.playerManagers.set("Beta_id", BetaPlayerManager);
-        const challenges:Challenge[] = [
-            {title: "1",description: "1",coins: 1},
-            {title: "2",description: "1",coins: 1},
-            {title: "3",description: "1",coins: 1},
-            {title: "4",description: "1",coins: 1},
-            {title: "5",description: "1",coins: 1},
-            {title: "6",description: "1",coins: 1},
-            {title: "7",description: "1",coins: 1},
-            {title: "8",description: "1",coins: 1},
-        ]
-        gameController.challengeManager.ChallengeDeck = challenges;
-        const req1 = httpMocks.createRequest({method: "POST", url: "/api/getChallenge", body: {id: "Beta_id", challengeTitle: "1"}});
-        const res1 = httpMocks.createResponse();
-        await startChallenge(req1, res1);
-        assert.strictEqual(res1._getStatusCode(), 200);
-        assert.deepEqual(res1._getData(),  {title: "1",description: "1",coins: 1});
+        await handleViewChallenges(room, id);
+        const result = socket.sent[0];
+        assert.strictEqual(result.type, 'viewChallengesResult');
+        assert.strictEqual(result.payload.length, challengeDrawSize);
+    });
 
-        // Make sure the challenge deck has removed 1.
-        assert.deepEqual(gameController.challengeManager.ChallengeDeck, [{title: "2",description: "1",coins: 1},
-            {title: "3",description: "1",coins: 1},
-            {title: "4",description: "1",coins: 1},
-            {title: "5",description: "1",coins: 1},
-            {title: "6",description: "1",coins: 1},
-            {title: "7",description: "1",coins: 1},
-            {title: "8",description: "1",coins: 1},])
-        // make sure the player now gets a challenge
-        assert.deepEqual(BetaPlayerManager.currChallenge ,{title: "1",description: "1",coins: 1});
-        // Make sure event was logged
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 1);
+    it('start / finish / veto a challenge', async function() {
+        const room = new CTFMatchRoom('TEST');
+        room.gameState = 'inGame';
+        const id = 'Alpha_id';
+        const player = new PlayerManager('Alpha', 'North', id, room.getContext.bind(room));
+        room.playerManagers.set(id, player);
+        const socket = new FakeSocket();
+        room.registerClient(id, socket as any);
 
-        //try all the other ways to break this
+        // Not-found / not in the drawable top of the deck
+        await handleStartChallenge(room, id, { challengeTitle: 'Not a real challenge' });
+        assert.strictEqual(socket.sent[socket.sent.length - 1].payload.errorCode, 406);
 
-        // try grabbing a challenge when you already have a challenge
-        const req2 = httpMocks.createRequest({method: "POST", url: "/api/getChallenge", body: {id: "Beta_id", challengeTitle: "2"}});
-        const res2 = httpMocks.createResponse();
-        await startChallenge(req2, res2);
-        assert.strictEqual(res2._getData(), "You already have a challenge going!");
+        // Success
+        const deckSizeBefore = room.challengeManager.ChallengeDeck.length;
+        const target = (await room.challengeManager.viewTop())[0];
+        await handleStartChallenge(room, id, { challengeTitle: target.title });
+        assert.deepEqual(socket.sent[socket.sent.length - 1], { type: 'startChallengeResult', payload: target });
+        assert.deepEqual(player.currChallenge, target);
+        assert.strictEqual(room.challengeManager.ChallengeDeck.length, deckSizeBefore - 1);
 
-        // try having a veto period
-        BetaPlayerManager.currChallenge = undefined;
-        BetaPlayerManager.vetoPeriodEnd = Date.now() + 10000;
-        const res3 = httpMocks.createResponse();
-        await startChallenge(req2, res3);
-        assert.strictEqual(res3._getData(), "Veto period not over yet");
-        
-        // try pulling a non existent challenge
-        BetaPlayerManager.vetoPeriodEnd = undefined;
-        const req4 = httpMocks.createRequest({method: "POST", url: "/api/getChallenge", body: {id: "Beta_id", challengeTitle: "1281703128"}});
-        const res4 = httpMocks.createResponse();
-        await startChallenge(req4, res4);
-        assert.strictEqual(res4._getData(), "Challenge no longer in deck / not found");
-        
-        // Try pulling a challenge that isn't in the top k
-        const req5 = httpMocks.createRequest({method: "POST", url: "/api/getChallenge", body: {id: "Beta_id", challengeTitle: "8"}});
-        const res5 = httpMocks.createResponse();
-        await startChallenge(req5, res5);
-        assert.strictEqual(res5._getData(), "Challenge no longer in deck / not found");
+        // Already has a challenge going
+        await handleStartChallenge(room, id, { challengeTitle: target.title });
+        assert.strictEqual(socket.sent[socket.sent.length - 1].payload.errorCode, 402);
 
-        // Pull the 3rd challenge
-        const req6 = httpMocks.createRequest({method: "POST", url: "/api/getChallenge", body: {id: "Beta_id", challengeTitle: "4"}});
-        const res6 = httpMocks.createResponse();
-        await startChallenge(req6, res6);
-        assert.deepEqual(res6._getData(), {title: "4",description: "1",coins: 1});
-        assert.deepEqual(gameController.challengeManager.ChallengeDeck, [{title: "2",description: "1",coins: 1},
-            {title: "3",description: "1",coins: 1},
-            {title: "5",description: "1",coins: 1},
-            {title: "6",description: "1",coins: 1},
-            {title: "7",description: "1",coins: 1},
-            {title: "8",description: "1",coins: 1},])
+        // finishChallenge: success, pays out and returns the card to the deck
+        const coinsBefore = player.coins;
+        await handleFinishChallenge(room, id);
+        assert.deepEqual(socket.sent[socket.sent.length - 1], { type: 'finishChallengeResult', payload: { success: true } });
+        assert.strictEqual(player.currChallenge, undefined);
+        assert.strictEqual(player.coins, coinsBefore + target.coins);
+        assert.strictEqual(room.challengeManager.ChallengeDeck.length, deckSizeBefore);
 
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 2);
-    })
-    it('finishChallenge', async function(){
-        // Set up
-        gameController.resetGame();
-        gameController.gameState= "inGame"
-        const BetaPlayerManager = new PlayerManager("Beta", "North", "Beta_id", gameController.getGameContext.bind(gameController));
-        gameController.playerManagers.set("Beta_id", BetaPlayerManager);
-        const challenges:Challenge[] = [
-            {title: "2",description: "1",coins: 1},
-            {title: "3",description: "1",coins: 1},
-            {title: "4",description: "1",coins: 1},
-            {title: "5",description: "1",coins: 1},
-            {title: "6",description: "1",coins: 1},
-            {title: "7",description: "1",coins: 1},
-            {title: "8",description: "1",coins: 1},
-        ]
-        gameController.challengeManager.ChallengeDeck = challenges;
+        // finishChallenge: no challenge going
+        await handleFinishChallenge(room, id);
+        assert.strictEqual(socket.sent[socket.sent.length - 1].payload.errorCode, 402);
 
-        // Try finishing without a current challenge
-        const req1 = httpMocks.createRequest({method: "POST", url: '/api/finishChallenge', body: {id: "Beta_id"}});
-        const res1 = httpMocks.createResponse();
+        // vetoChallenge: no challenge going
+        await handleVetoChallenge(room, id);
+        assert.strictEqual(socket.sent[socket.sent.length - 1].payload.errorCode, 402);
 
-        await finishChallenge(req1, res1);
-        assert.strictEqual(res1._getData(),"You don't have a challenge going!")
-
-        // Ok now we actually
-        BetaPlayerManager.currChallenge = {title: "1", description: "1", coins: 1}
-        const res2 = httpMocks.createResponse();
-        await finishChallenge(req1, res2);
-        assert.strictEqual(res2._getData(),"Success")
-        assert.strictEqual(BetaPlayerManager.currChallenge, undefined);
-        assert.strictEqual(BetaPlayerManager.coins, startingCoins + 1);
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 1);
-
-        // Make sure it was put back into the deck 
-        assert.deepEqual(gameController.challengeManager.ChallengeDeck, [
-            {title: "2",description: "1",coins: 1},
-            {title: "3",description: "1",coins: 1},
-            {title: "4",description: "1",coins: 1},
-            {title: "5",description: "1",coins: 1},
-            {title: "6",description: "1",coins: 1},
-            {title: "7",description: "1",coins: 1},
-            {title: "8",description: "1",coins: 1},
-            {title: "1", description: "1", coins: 1}
-        ]);
-    })
-    it('vetoChallenge', async function() {
-        gameController.resetGame();
-        gameController.gameState= "inGame"
-        const BetaPlayerManager = new PlayerManager("Beta", "North", "Beta_id", gameController.getGameContext.bind(gameController));
-        gameController.playerManagers.set("Beta_id", BetaPlayerManager);
-        const challenges:Challenge[] = [
-            {title: "2",description: "1",coins: 1},
-            {title: "3",description: "1",coins: 1},
-            {title: "4",description: "1",coins: 1},
-            {title: "5",description: "1",coins: 1},
-            {title: "6",description: "1",coins: 1},
-            {title: "7",description: "1",coins: 1},
-            {title: "8",description: "1",coins: 1},
-        ]
-        gameController.challengeManager.ChallengeDeck = challenges;
-
-        // Try vetoing without a challenge
-        const req1 = httpMocks.createRequest({method: "POST", url: '/api/vetoChallenge', body: {id: "Beta_id"}});
-        const res1 = httpMocks.createResponse();
-        await vetoChallenge(req1, res1);
-        assert.strictEqual(res1._getData(), "You don't have a challenge going!");
-
-        // Ok now we actually
-        BetaPlayerManager.currChallenge = {title: "1", description: "1", coins: 1}
-        const res2 = httpMocks.createResponse();
-        await vetoChallenge(req1, res2);
-        //assert.strictEqual(res2._getData(), "Success");
-
-        assert.strictEqual(gameController.eventManager.gameEvents.length, 1);
-        assert.ok(BetaPlayerManager.vetoPeriodEnd != undefined);
-        assert.ok(BetaPlayerManager.vetoPeriodEnd> Date.now());
-        assert.ok(BetaPlayerManager.currChallenge == undefined);
-        // Make sure it was put back into the deck 
-        assert.deepEqual(gameController.challengeManager.ChallengeDeck, [
-            {title: "2",description: "1",coins: 1},
-            {title: "3",description: "1",coins: 1},
-            {title: "4",description: "1",coins: 1},
-            {title: "5",description: "1",coins: 1},
-            {title: "6",description: "1",coins: 1},
-            {title: "7",description: "1",coins: 1},
-            {title: "8",description: "1",coins: 1},
-            {title: "1", description: "1", coins: 1}
-        ]);
-    })
-})
+        // Start another, then veto it
+        const target2 = (await room.challengeManager.viewTop())[0];
+        await handleStartChallenge(room, id, { challengeTitle: target2.title });
+        await handleVetoChallenge(room, id);
+        const vetoResult = socket.sent[socket.sent.length - 1];
+        assert.strictEqual(vetoResult.type, 'vetoChallengeResult');
+        assert.ok(vetoResult.payload.vetoPeriodEnd !== undefined);
+        assert.strictEqual(player.currChallenge, undefined);
+        assert.ok(player.vetoPeriodEnd !== undefined && player.vetoPeriodEnd > Date.now());
+    });
+});

@@ -1,5 +1,5 @@
 import { Mutex } from "async-mutex";
-import { GameContext, gameController } from "./GameController";
+import { CTFRoomContext } from "../rooms/ctf/CTFRoomContext";
 import { Error, Team } from "../common/types";
 import { randomUUID } from 'crypto';
 import { VERBOSE } from "../config/game_settings";
@@ -10,7 +10,7 @@ import { PlayerManager } from "./PlayerManager";
 export class TeamManager {
 
     constructor(
-        private getGameContext: () => GameContext
+        private getGameContext: () => CTFRoomContext
     ){}
     
     teamManagerLock = new Mutex();
@@ -140,15 +140,15 @@ export class TeamManager {
     // SHould be run inside this class' lock
     initializePlayerManagers(): Map<String, PlayerManager>{
         const map: Map<String, PlayerManager> = new Map();
-        
+
         for(const playerName of this.teamNorth){
             const id = this.playerToID[playerName]?? "";
-            const playerManager = new PlayerManager(playerName, "North",  id, this.getGameContext.bind(gameController))
+            const playerManager = new PlayerManager(playerName, "North",  id, this.getGameContext)
             map.set(this.playerToID[playerName],playerManager);
         }
         for(const playerName of this.teamSouth){
             const id = this.playerToID[playerName]?? "";
-            const playerManager = new PlayerManager(playerName, "South", id, this.getGameContext.bind(gameController))
+            const playerManager = new PlayerManager(playerName, "South", id, this.getGameContext)
             map.set(this.playerToID[playerName],playerManager);
         }
 
