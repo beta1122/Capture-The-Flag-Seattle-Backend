@@ -6,7 +6,7 @@ import { CTFMatchRoom } from "./ctf/CTFMatchRoom";
 import { getDb } from "./ctf/persistence/db";
 
 const port: number = Number(process.env.PORT ?? 8088);
-const host: string = process.env.HOST ?? "192.168.12.232";
+const host: string = process.env.HOST ?? "0.0.0.0";
 
 // Runs the sqlite migration eagerly on boot rather than waiting for the first match to
 // end, so a bad DB path/permissions issue fails fast instead of silently on game-over.

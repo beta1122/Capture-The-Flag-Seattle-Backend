@@ -102,6 +102,34 @@ dev machine and point the phone at your machine's LAN IP instead of `localhost`.
    notes below for the platform-specific gotcha this triggers (plain HTTP/WS is blocked
    by default on both iOS and Android).
 
+## Running across different networks (tunnel)
+
+The LAN setup above only works if the client is on the *same* Wi-Fi as the dev machine —
+`192.168.x.x` addresses aren't reachable from a different network or from cellular data at
+all. For that, tunnel the server through [ngrok](https://ngrok.com) instead: it opens an
+outbound connection from your machine to ngrok's relay, and gives you back a public
+`https://...ngrok-free.app` hostname that forwards to your local port - no router
+config, no port forwarding, and it terminates real TLS for you (which also means no more
+ATS/cleartext exceptions needed on the client, see below).
+
+1. **One-time setup**: install the ngrok CLI (`brew install ngrok` on macOS, or download
+   from ngrok.com), sign up for a free account, then run
+   `ngrok config add-authtoken <your-authtoken>` (from your ngrok dashboard). This writes
+   to `~/.ngrok2/ngrok.yml` / `~/Library/Application Support/ngrok/ngrok.yml` - not part of
+   this repo, so it's a per-machine step, not something to commit.
+2. **Run it**: `npm run start:tunnel` - starts the dev server and an ngrok tunnel to it
+   side by side in one terminal.
+3. **Grab the forwarding URL** from the ngrok output (`Forwarding  https://abcd1234.ngrok-free.app -> http://localhost:8088`)
+   and point the client at it instead of a LAN IP: `https://abcd1234.ngrok-free.app/api/joinMatch`
+   for REST, `wss://abcd1234.ngrok-free.app/ws?roomCode=...&playerId=...` for the WebSocket.
+   Use `wss://`, not `ws://` - ngrok terminates TLS at the tunnel.
+
+Caveats: the free ngrok tier gives you a new random hostname every time you restart the
+tunnel (a paid plan or a Cloudflare Tunnel with your own domain gets a stable one), and the
+tunnel - like the server itself in this setup - only stays up as long as your machine and
+that terminal do. For anything that needs to run unattended, this isn't a substitute for
+an actual deployment (a VPS/PaaS with its own domain).
+
 ## Client integration guide
 
 There's no official SDK for this protocol on any platform (it's a plain WebSocket +

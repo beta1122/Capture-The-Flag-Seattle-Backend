@@ -8,7 +8,9 @@
     "lint": "comfy-tslint src/*.{ts,tsx}",
     "test": "CTF_DB_PATH=:memory: ts-mocha -p tsconfig.json src/**/*_test.ts",
     "server": "node .",
-    "start": "tsc-watch -p tsconfig.json --onSuccess \"node .\""
+    "start": "tsc-watch -p tsconfig.json --onSuccess \"node .\"",
+    "tunnel": "ngrok http ${PORT:-8088}",
+    "start:tunnel": "concurrently -n server,ngrok -c blue,green \"npm run start\" \"npm run tunnel\""
   },
   "author": "",
   "license": "ISC",
@@ -26,6 +28,7 @@
     "@types/ws": "^8.5.12",
     "assert": "^2.0.0",
     "comfy-tslint": "^0.1.9",
+    "concurrently": "^9.2.4",
     "mocha": "^10.1.0",
     "ts-mocha": "^10.0.0",
     "tsc-watch": "^6.0.4",
