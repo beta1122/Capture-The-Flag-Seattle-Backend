@@ -1,1 +1,0 @@
-export const hostname = '10.19.83.151';
